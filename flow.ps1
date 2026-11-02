@@ -21,9 +21,22 @@ function Test-PinchTab {
         if ($_.Exception.Response) { return $true } ; return $false
     }
 }
+function Find-PinchTabExe {
+    # npm installs a node shim (pinchtab.ps1 / .cmd); the real binary sits in the package's .managed-bin folder.
+    $root = (npm root -g 2>$null)
+    if ($root) {
+        $exe = Get-ChildItem (Join-Path $root.Trim() 'pinchtab\.managed-bin') -Recurse -Filter 'pinchtab-windows-*.exe' -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($exe) { return $exe.FullName }
+    }
+    $cmd = Get-Command pinchtab.cmd -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) { return $cmd.Source }
+    return $null
+}
 if (-not (Test-PinchTab)) {
-    $exe = (Get-Command pinchtab).Source
-    Start-Process -WindowStyle Hidden -FilePath 'cmd.exe' -ArgumentList '/c', "`"$exe`" server" | Out-Null
+    $exe = Find-PinchTabExe
+    if (-not $exe) { Write-Error 'PinchTab not found: run .\setup.ps1'; exit 1 }
+    Start-Process -WindowStyle Hidden -FilePath $exe -ArgumentList 'server' | Out-Null
     for ($i = 0; $i -lt 40 -and -not (Test-PinchTab); $i++) { Start-Sleep -Milliseconds 500 }
     if (-not (Test-PinchTab)) { Write-Error 'PinchTab server did not start (try: pinchtab server)'; exit 1 }
 }
