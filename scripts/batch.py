@@ -92,8 +92,8 @@ def download_once(index: int, quality: str, out: Path, name: str, timeout_min: f
 
 def robust_download(attempt, quality: str) -> dict:
     """attempt(quality, timeout_min, reload) -> google-flow download dict. A hung upscale is retried after refreshing
-    the Flow page (that usually unsticks it); only after UPSCALE_ATTEMPTS tries does it fall back to the 1K original,
-    so an unattended run never stops on a slow Flow upscale. Adds "fallback": True when it did."""
+    the Flow page (that usually unsticks it). After UPSCALE_ATTEMPTS failures it gives up and the run stops with the
+    reason: it never saves a lower quality instead."""
     last = {}
     for i in range(UPSCALE_ATTEMPTS):
         last = attempt(quality, UPSCALE_TIMEOUT_MIN, i > 0)
@@ -101,12 +101,6 @@ def robust_download(attempt, quality: str) -> dict:
             return last
         print(f"[batch] {quality} download attempt {i + 1}/{UPSCALE_ATTEMPTS} failed: {str(last.get('error'))[:120]}"
               + ("; refreshing the Flow page and retrying" if i + 1 < UPSCALE_ATTEMPTS else ""), file=sys.stderr, flush=True)
-    if quality.lower() not in ("original", "1k"):
-        d = attempt("original", UPSCALE_TIMEOUT_MIN, True)
-        if d.get("path"):
-            d["fallback"] = True
-            d["fallback_reason"] = f"{quality} upscale failed {UPSCALE_ATTEMPTS}x: {str(last.get('error'))[:120]}"
-            return d
     return last
 
 
@@ -171,11 +165,10 @@ class Job:
                       "--download", "original", "--out", str(prev), "--name", nn, "--timeout", str(a.timeout_min)],
                      timeout_s=(a.timeout_min + 10) * 60)
             if not r.get("results"):
-                return {"ok": False, "n": n, "error": r.get("error"),
+                return {"ok": False, "n": n, "error": r.get("error"), "flow_stderr": (r.get("stderr") or "")[-600:] or None,
                         "hint": "run `flow.ps1 list image --limit 6` before retrying; use gen --adopt if the tiles exist"}
             tiles = [{"i": x["index"], "title": x["title"], "failed": x["failed"]} for x in r["results"]]
             spent = r.get("credits_spent")
-        self.state["last_titles"] = [t["title"] for t in sorted(tiles, key=lambda t: t["i"])]
         takes = sorted(int(m.group(1)) for f in prev.iterdir() if (m := re.match(rf"^{nn}_(\d+)\.", f.name)))
         if not takes:
             return {"ok": False, "n": n, "error": "no take was downloaded", "tiles": tiles}
@@ -226,23 +219,6 @@ class Job:
         self.save()
         return {"ok": True, "n": p["n"], "saved": saved}
 
-    def recover(self, n: int, err: dict) -> dict:
-        """A gen error (e.g. a PinchTab click timeout) can come after Flow accepted the prompt. Wait for the newest
-        tiles to finish; if they are new (not the previous prompt's) adopt them instead of generating again."""
-        print(f"[batch] prompt {n}: gen error ({str(err.get('error'))[:120]}); checking Flow for its tiles…",
-              file=sys.stderr, flush=True)
-        last = self.state.get("last_titles") or []
-        for _ in range(20):
-            tiles = flow(["list", "image", "--limit", str(self.a.count)]).get("tiles") or []
-            titles = [t["title"] for t in tiles]
-            if titles and titles == last[:len(titles)]:
-                return err  # nothing new appeared: the prompt was not submitted
-            if len(tiles) == self.a.count and all(t.get("progress") in (None, 100) and not t.get("failed") for t in tiles):
-                print(f"[batch] prompt {n}: Flow has its tiles, adopting them", file=sys.stderr, flush=True)
-                return self.gen(n, adopt=True)
-            time.sleep(15)
-        return err
-
     # -- run ------------------------------------------------------------------------------------
     def run(self) -> dict:
         a = self.a
@@ -262,8 +238,6 @@ class Job:
             todo = [n for n in todo if n != p["n"]]
         for n in todo:
             g = self.gen(n, adopt=False)
-            if not g.get("ok") and not self.state.get("pending"):
-                g = self.recover(n, g)
             if not g.get("ok"):
                 return emit({"stage": "gen", **g})
             takes, why = autopick(g["sheet"], self.prompts[n], a.keep, a.picker_model, g["takes"])

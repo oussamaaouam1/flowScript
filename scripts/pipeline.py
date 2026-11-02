@@ -10,7 +10,7 @@ Safety (to stay a normal, light user of Flow):
   * a daily cap on prompts (--max-per-day, default 60), counted across runs.
 
 Same files and state as batch.py (NN_a.jpg / NN_b.jpg, OUT/_flowscript_state.json); scenes already saved are skipped.
-Run through the wrapper so PinchTab is set up:  .\\flow.ps1 -Pipeline PROMPTS.txt --out DIR [--set 2 --offset 17]
+Run through the wrapper so PinchTab is set up:  .\\flow.ps1 --pipeline PROMPTS.txt --out DIR [--set 2 --offset 17]
 """
 from __future__ import annotations
 

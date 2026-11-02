@@ -60,6 +60,6 @@ if (-not (Test-Path $bak)) { Copy-Item $ptConf $bak }
 if ($LASTEXITCODE -ne 0) { throw 'could not update the PinchTab config' }
 
 # 4. server
-& (Join-Path $Root 'flow.ps1') -EnsureServerOnly
+& (Join-Path $Root 'flow.ps1') --ensure-server
 Write-Host ''
 Write-Host 'Done. Next: sign in once ->  .\flow.ps1 login   (or  .\flow.ps1 setup --cookies <export.json>)'
