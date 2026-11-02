@@ -1,6 +1,6 @@
 ---
 name: flowscript
-description: Batch-generate story images in Google Flow (Nano Banana) on Windows from a prompts text file — x3 per prompt, one prompt at a time, upscaled 2K downloads into a folder — then keep the best 2 of each 3. Use when the user gives a prompts file ("Prompt 1: ...", "Prompt 2: ...") and wants Flow images generated, downloaded and picked, or wants to resume such a batch.
+description: Batch-generate story images in Google Flow (Nano Banana) on Windows from a prompts text file — x3 per prompt, one prompt at a time — then save only the best 2 of each 3, upscaled to 2K, into a folder. Use when the user gives a prompts file ("Prompt 1: ...", "Prompt 2: ...") and wants Flow images generated, picked and downloaded, or wants to resume such a batch.
 ---
 
 # flowScript — batch Flow images from a prompts file
@@ -17,37 +17,37 @@ cd ~/Developer/flowScript
 ```
 - `vendor\google-flow` missing or PinchTab not set up → the user runs `.\setup.ps1` (it changes PinchTab security
   settings, so let the user run it; do not edit the PinchTab config yourself).
-- Not signed in → `.\flow.ps1 login` (serves a live view of the automation browser at 127.0.0.1:8790; the user signs in
-  there) or `.\flow.ps1 setup --cookies <Cookie-Editor export.json>`. Never type or ask for passwords; never print cookies.
-- No project yet → `.\flow.ps1 new-project --save`, or `.\flow.ps1 setup --project https://flow.google.com/project/<id>`.
+- Not signed in → `.\flow.ps1 login` (prints a 127.0.0.1:8790 URL; the user opens it and signs in there; the command
+  exits once signed in) or `.\flow.ps1 setup --cookies <export.json>`. Never type or ask for passwords; never print cookies.
+- Tell the user which project is used (`project_url` in status). Change it with
+  `.\flow.ps1 setup --project https://flow.google.com/project/<id>` or `.\flow.ps1 new-project --save`.
 
-## The job
+## The job: per prompt, gen → look → keep
 
-1. Look at the file: `python scripts\batch.py PROMPTS.txt --list` → sets and counts. Confirm with the user which set goes
-   to which folder if it is not obvious.
-2. Generate, one prompt at a time (the next prompt is only sent after the previous one finished and downloaded):
-   ```powershell
-   python scripts\batch.py PROMPTS.txt --out "C:\...\1" --set 1 [--from 4] [--to 17]
-   ```
-   Defaults: Nano Banana 2.1, 16:9, x3, 2K upscale. Output `NN_1.jpg NN_2.jpg NN_3.jpg` per prompt, one JSON line per
-   prompt on stdout. Run it in the background for long sets; it resumes from `OUT\_flowscript_state.json` if stopped.
-3. Pick the best 2 of 3 for each prompt:
-   ```powershell
-   .\scripts\pick.ps1 -Out "C:\...\1" -N 4 -Sheet      # -> OUT\_sheets\04.jpg (takes side by side, labelled 1 2 3)
-   ```
-   Read the sheet image (one small read, not three 2K files). Judge against the prompt: right characters and clothing,
-   the requested camera angle and composition, faces and hands without defects (extra fingers, merged limbs), no text
-   or watermark, consistent look with earlier scenes. Then:
-   ```powershell
-   .\scripts\pick.ps1 -Out "C:\...\1" -N 4 -Keep 2,3    # 04_2 -> 04_a, 04_3 -> 04_b, 04_1 -> OUT\_rejected\
-   ```
-   Tell the user one line per scene: which two were kept and why the third was dropped.
+Only the chosen takes are upscaled and saved; the output folder never gets the rejected take.
+
+```powershell
+$B = "python scripts\batch.py PROMPTS.txt --out ""C:\...\1"""
+python scripts\batch.py PROMPTS.txt --list                       # sets and prompt counts
+python scripts\batch.py PROMPTS.txt --out "C:\...\1" status      # done / todo / pending
+python scripts\batch.py PROMPTS.txt --out "C:\...\1" gen [--n 9] # x3, waits, 1K previews in %TEMP% + one contact sheet
+python scripts\batch.py PROMPTS.txt --out "C:\...\1" keep 1,3    # upscale takes 1 and 3 to 2K -> 09_a.jpg, 09_b.jpg
+```
+
+1. `gen` (no `--n` = the next prompt not done) returns `{"sheet": "...\_sheets\09.jpg", "takes": [1,2,3]}`. The next
+   prompt is only generated after `keep`, so prompts never overlap.
+2. Read the sheet (one small image, takes labelled 1 2 3 left to right) and the prompt text. Judge: right characters and
+   clothing, the requested shot/angle and composition, the key action and props, faces and hands without defects
+   (extra fingers, merged limbs), no text or watermark, consistent look with earlier scenes.
+3. `keep A,B` with the two best. Tell the user one line per scene: which two were kept and why the third was dropped.
+
+Recovery: prompt generated but not downloaded (run stopped) → `gen --n N --adopt` uses the newest 3 tiles in Flow
+without generating again. Defaults: Nano Banana 2.1, 16:9, x3, keep at 2K (`--quality` to change).
 
 ## Rules
 
-- Images cost 0 credits on the user's plan, but always report `credits_spent` from the JSON if it is not 0.
-- Never loop or re-run a prompt after an unclear error: `.\flow.ps1 list image --limit 6` first to see whether the
-  tiles exist; `.\flow.ps1 download <index> --quality 2k --out DIR --name NN_1` recovers a missed download.
+- Images cost 0 credits on the user's plan, but report `credits_spent` from the JSON if it is not 0.
+- Never re-run `gen` after an unclear error: `.\flow.ps1 list image --limit 6` first; if the tiles exist, `--adopt`.
 - If Flow refuses a prompt (policy), report the message and skip it; don't rewrite story prompts without asking.
 - Flow UI changed or a command fails strangely → `.\flow.ps1 shot --out $env:TEMP\flow.jpg`, read it, and see
   `vendor\google-flow\references\internals.md`.

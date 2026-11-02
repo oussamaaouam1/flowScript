@@ -34,19 +34,20 @@ Then sign the automation browser in to Google once:
 ## Use
 
 ```powershell
-python scripts\batch.py prompts.txt --list                       # sets and prompt counts
-python scripts\batch.py prompts.txt --out "D:\YT\story\1" --set 1  # x3, 2K, one prompt at a time, resumable
-.\scripts\pick.ps1 -Out "D:\YT\story\1" -N 3 -Sheet               # contact sheet of scene 3's takes
-.\scripts\pick.ps1 -Out "D:\YT\story\1" -N 3 -Keep 1,2            # keep 03_1, 03_2 as 03_a, 03_b
+python scripts\batch.py prompts.txt --list                          # sets and prompt counts
+python scripts\batch.py prompts.txt --out "D:\YT\story\1" gen       # next prompt: x3, waits, previews + contact sheet
+python scripts\batch.py prompts.txt --out "D:\YT\story\1" keep 1,3  # upscale only takes 1 and 3 -> NN_a.jpg, NN_b.jpg (2K)
+python scripts\batch.py prompts.txt --out "D:\YT\story\1" status    # done / todo
 ```
 
+Only the two chosen takes are upscaled and saved; previews stay in %TEMP% and are deleted after `keep`.
 Prompts file: lines starting with `Prompt N:`; other lines are ignored. When the numbering restarts at 1, a new set starts.
 
 ## Using it from an agent
 
 [`SKILL.md`](SKILL.md) is the agent skill. For Claude Code, copy or link this folder to `~/.claude/skills/flowscript`.
-Other agents (Antigravity / Gemini) can be told to read `SKILL.md` first. The repetitive part (run `batch.py`, look at one
-contact sheet per scene, call `pick.ps1`) is simple enough for a fast, cheap model.
+Other agents (Antigravity / Gemini) can be told to read `SKILL.md` first. The repetitive part (`gen`, look at one contact sheet
+per scene, `keep`) is simple enough for a fast, cheap model.
 
 ## Never committed
 
