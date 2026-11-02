@@ -22,13 +22,23 @@ cd ~/Developer/flowScript
 - Tell the user which project is used (`project_url` in status). Change it with
   `.\flow.ps1 setup --project https://flow.google.com/project/<id>` or `.\flow.ps1 new-project --save`.
 
-## The job: per prompt, gen → look → keep
+## The job: unattended (default)
+
+```powershell
+python scripts\batch.py PROMPTS.txt --list                                   # sets and prompt counts
+python scripts\batch.py PROMPTS.txt --out "C:\...\1" run --from 14 --to 17   # gen -> auto-pick -> keep, per prompt
+```
+Run it in the background. Per prompt it generates x3, a cheap vision model picks the best 2 from a small contact sheet
+(Antigravity `agy`, `--picker-model gemini-3.8-flash-low`, ~7 s; it may only read files), and only those 2 are upscaled
+to 2K as `NN_a.jpg`, `NN_b.jpg`. One JSON line per prompt with the kept takes and the picker's reason; relay them.
+Scenes whose `NN_a` already exists in the folder (made by hand) are skipped, and nothing is ever overwritten. If the
+pick fails, `run` stops with the prompt pending: look at the sheet yourself, `keep A,B`, then `run` again.
+
+## The job: manual, per prompt (gen → look → keep)
 
 Only the chosen takes are upscaled and saved; the output folder never gets the rejected take.
 
 ```powershell
-$B = "python scripts\batch.py PROMPTS.txt --out ""C:\...\1"""
-python scripts\batch.py PROMPTS.txt --list                       # sets and prompt counts
 python scripts\batch.py PROMPTS.txt --out "C:\...\1" status      # done / todo / pending
 python scripts\batch.py PROMPTS.txt --out "C:\...\1" gen [--n 9] # x3, waits, 1K previews in %TEMP% + one contact sheet
 python scripts\batch.py PROMPTS.txt --out "C:\...\1" keep 1,3    # upscale takes 1 and 3 to 2K -> 09_a.jpg, 09_b.jpg
