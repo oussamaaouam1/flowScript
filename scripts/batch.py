@@ -121,7 +121,7 @@ class Job:
         t0 = time.time()
         if adopt:
             tiles = flow(["list", "image", "--limit", str(a.count)]).get("tiles") or []
-            if len(tiles) < a.count or any(t.get("failed") or t.get("progress") for t in tiles):
+            if len(tiles) < a.count or any(t.get("failed") or t.get("progress") not in (None, 100) for t in tiles):
                 return {"ok": False, "error": "the newest tiles are not finished images", "tiles": tiles}
             for t in tiles:
                 d = flow(["download", str(t["i"]), "--quality", "original", "--out", str(prev), "--name", f"{nn}_{t['i'] + 1}"])
@@ -138,6 +138,7 @@ class Job:
                         "hint": "run `flow.ps1 list image --limit 6` before retrying; use gen --adopt if the tiles exist"}
             tiles = [{"i": x["index"], "title": x["title"], "failed": x["failed"]} for x in r["results"]]
             spent = r.get("credits_spent")
+        self.state["last_titles"] = [t["title"] for t in sorted(tiles, key=lambda t: t["i"])]
         takes = sorted(int(m.group(1)) for f in prev.iterdir() if (m := re.match(rf"^{nn}_(\d+)\.", f.name)))
         if not takes:
             return {"ok": False, "n": n, "error": "no take was downloaded", "tiles": tiles}
@@ -183,6 +184,23 @@ class Job:
         self.save()
         return {"ok": True, "n": p["n"], "saved": saved}
 
+    def recover(self, n: int, err: dict) -> dict:
+        """A gen error (e.g. a PinchTab click timeout) can come after Flow accepted the prompt. Wait for the newest
+        tiles to finish; if they are new (not the previous prompt's) adopt them instead of generating again."""
+        print(f"[batch] prompt {n}: gen error ({str(err.get('error'))[:120]}); checking Flow for its tiles…",
+              file=sys.stderr, flush=True)
+        last = self.state.get("last_titles") or []
+        for _ in range(20):
+            tiles = flow(["list", "image", "--limit", str(self.a.count)]).get("tiles") or []
+            titles = [t["title"] for t in tiles]
+            if titles and titles == last[:len(titles)]:
+                return err  # nothing new appeared: the prompt was not submitted
+            if len(tiles) == self.a.count and all(t.get("progress") in (None, 100) and not t.get("failed") for t in tiles):
+                print(f"[batch] prompt {n}: Flow has its tiles, adopting them", file=sys.stderr, flush=True)
+                return self.gen(n, adopt=True)
+            time.sleep(15)
+        return err
+
     # -- run ------------------------------------------------------------------------------------
     def run(self) -> dict:
         a = self.a
@@ -191,6 +209,8 @@ class Job:
         done = []
         for n in todo:
             g = self.gen(n, adopt=False)
+            if not g.get("ok") and not self.state.get("pending"):
+                g = self.recover(n, g)
             if not g.get("ok"):
                 return emit({"stage": "gen", **g})
             takes, why = autopick(g["sheet"], self.prompts[n], a.keep, a.picker_model)
