@@ -3,7 +3,8 @@
 #   .\flow.ps1 image -p "PROMPT" --count 3 --download 2k --out C:\path --name 01
 # It sets UTF-8 mode and the PinchTab config path, and starts the PinchTab server when it is not running
 # (flow.py cannot launch the npm `pinchtab` shim on Windows by itself).
-param([switch]$EnsureServerOnly)
+#   .\flow.ps1 -Pipeline PROMPTS.txt --out DIR [--set 2 --offset 17]   (scripts\pipeline.py: the faster unattended run)
+param([switch]$EnsureServerOnly, [switch]$Pipeline)
 $ErrorActionPreference = 'Stop'
 $Root = $PSScriptRoot
 $py = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'
@@ -42,5 +43,6 @@ if (-not (Test-PinchTab)) {
 }
 if ($EnsureServerOnly) { Write-Host 'PinchTab server: running'; exit 0 }
 
+if ($Pipeline) { & $py -X utf8 (Join-Path $Root 'scripts\pipeline.py') @args; exit $LASTEXITCODE }
 & $py -X utf8 $flow @args
 exit $LASTEXITCODE

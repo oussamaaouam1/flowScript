@@ -73,6 +73,42 @@ def flow(args: list[str], timeout_s: int = 1200) -> dict:
     return {"ok": False, "error": "no JSON from flow.py", "stdout": p.stdout[-800:], "stderr": p.stderr[-800:]}
 
 
+PICKER_FALLBACK = ["gemini-3.8-flash-high", "claude-sonnet-4-6"]   # tried in order when the cheap picker fails
+UPSCALE_TIMEOUT_MIN = 3     # a Flow upscale normally takes ~15 s; a request that hangs longer is retried
+UPSCALE_ATTEMPTS = 3
+
+
+def download_once(index: int, quality: str, out: Path, name: str, timeout_min: float) -> dict:
+    env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    env.setdefault("PINCHTAB_CONFIG", str(Path(os.environ.get("APPDATA", "")) / "pinchtab" / "config.json"))
+    try:
+        p = subprocess.run([sys.executable, "-X", "utf8", str(ROOT / "scripts" / "dl.py"), str(index), quality, str(out),
+                            name, str(timeout_min)], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           env=env, timeout=timeout_min * 60 + 120)
+        return json.loads(p.stdout.strip().splitlines()[-1])
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"download helper failed: {e}"}
+
+
+def robust_download(attempt, quality: str) -> dict:
+    """attempt(quality, timeout_min) -> google-flow download dict. Retries a hung upscale, then falls back to the
+    1K original so an unattended run never stops on a slow Flow upscale. Adds "fallback": True when it did."""
+    last = {}
+    for i in range(UPSCALE_ATTEMPTS):
+        last = attempt(quality, UPSCALE_TIMEOUT_MIN)
+        if last.get("path"):
+            return last
+        print(f"[batch] {quality} download attempt {i + 1}/{UPSCALE_ATTEMPTS} failed: {str(last.get('error'))[:120]}",
+              file=sys.stderr, flush=True)
+    if quality.lower() not in ("original", "1k"):
+        d = attempt("original", UPSCALE_TIMEOUT_MIN)
+        if d.get("path"):
+            d["fallback"] = True
+            d["fallback_reason"] = f"{quality} upscale failed {UPSCALE_ATTEMPTS}x: {str(last.get('error'))[:120]}"
+            return d
+    return last
+
+
 def emit(obj: dict) -> dict:
     print(json.dumps(obj, ensure_ascii=False), flush=True)
     return obj
@@ -172,11 +208,12 @@ class Job:
                     "download by hand with `flow.ps1 download <index>`", "now": [t["title"] for t in latest], "then": then}
         saved = []
         for k, take in enumerate(chosen):
-            d = flow(["download", str(take - 1), "--quality", self.a.quality, "--out", str(self.out),
-                      "--name", f"{nn}_{LETTERS[k]}"])
+            d = robust_download(lambda q, t, take=take, k=k: download_once(take - 1, q, self.out, f"{nn}_{LETTERS[k]}", t),
+                                self.a.quality)
             if not d.get("path"):
                 return {"ok": False, "error": f"download of take {take} failed", "detail": d, "saved": saved}
-            saved.append({"take": take, "path": d["path"], "width": d.get("width"), "height": d.get("height")})
+            saved.append({"take": take, "path": d["path"], "quality": d.get("quality"),
+                          **({"fallback": d["fallback_reason"]} if d.get("fallback") else {})})
         self.state["done"][f"{p['set']}:{p['n']}"] = {"kept": chosen, "files": [s["path"] for s in saved],
                                                        **({"reason": reason} if reason else {})}
         shutil.rmtree(p["preview"], ignore_errors=True)
@@ -207,13 +244,24 @@ class Job:
         todo = [n for n in self.prompts if (a.start is None or n >= a.start) and (a.end is None or n <= a.end)
                 and not self.already_saved(n)]
         done = []
+        p = self.state.get("pending")
+        if p and not p.get("keys"):          # a scene left between gen and keep (stopped run, failed upscale)
+            print(f"[batch] finishing pending prompt {p['n']} first", file=sys.stderr, flush=True)
+            takes, why = autopick(p["sheet"], self.prompts[p["n"]], a.keep, a.picker_model, p["takes"])
+            if not takes:
+                return emit({"ok": False, "n": p["n"], "stage": "pick", "error": why, "sheet": p["sheet"]})
+            k = self.keep(",".join(map(str, takes)), reason=why)
+            if not k.get("ok"):
+                return emit({"stage": "keep", **k})
+            emit({"ok": True, "n": p["n"], "kept": takes, "reason": why, "files": k["saved"]})
+            todo = [n for n in todo if n != p["n"]]
         for n in todo:
             g = self.gen(n, adopt=False)
             if not g.get("ok") and not self.state.get("pending"):
                 g = self.recover(n, g)
             if not g.get("ok"):
                 return emit({"stage": "gen", **g})
-            takes, why = autopick(g["sheet"], self.prompts[n], a.keep, a.picker_model)
+            takes, why = autopick(g["sheet"], self.prompts[n], a.keep, a.picker_model, g["takes"])
             if not takes or len(set(takes)) != a.keep or any(t not in g["takes"] for t in takes):
                 return emit({"ok": False, "n": n, "stage": "pick", "error": why, "sheet": g["sheet"],
                              "hint": "look at the sheet, then `keep A,B`, then `run` again to continue"})
@@ -221,11 +269,25 @@ class Job:
             if not k.get("ok"):
                 return emit({"stage": "keep", **k})
             done.append(n)
-            emit({"ok": True, "n": n, "kept": takes, "reason": why, "gen_seconds": g.get("seconds")})
+            emit({"ok": True, "n": n, "kept": takes, "reason": why, "gen_seconds": g.get("seconds"),
+                  **({"fallback": [x["fallback"] for x in k["saved"] if x.get("fallback")]}
+                     if any(x.get("fallback") for x in k["saved"]) else {})})
         return emit({"ok": True, "done": done, "message": "range finished"})
 
 
-def autopick(sheet: str, prompt: str, keep: int, model: str) -> tuple[list[int] | None, str]:
+def autopick(sheet: str, prompt: str, keep: int, model: str, takes: list[int] | None = None) -> tuple[list[int] | None, str]:
+    """Pick with the cheap model; if its answer is missing or invalid, retry with better models (PICKER_FALLBACK)."""
+    why = ""
+    for m in [model] + [x for x in PICKER_FALLBACK if x != model]:
+        nums, why = _autopick_once(sheet, prompt, keep, m)
+        valid = nums and len(set(nums)) == keep and (takes is None or all(n in takes for n in nums))
+        if valid:
+            return nums, why if m == model else f"[{m}] {why}"
+        print(f"[batch] picker {m} gave no valid answer ({why[:100]}); trying a better model", file=sys.stderr, flush=True)
+    return None, why
+
+
+def _autopick_once(sheet: str, prompt: str, keep: int, model: str) -> tuple[list[int] | None, str]:
     """Ask a cheap vision model (Antigravity `agy`) which takes to keep. It may only read files: shell commands and
     writes are denied, and it runs in the contact sheet's folder."""
     agy = shutil.which("agy")
