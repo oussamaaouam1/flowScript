@@ -110,6 +110,23 @@ class Pipeline:
         self.job.save()
         return pending
 
+    def reload(self):
+        """Refresh the Flow project page: a stuck upscale usually works again afterwards."""
+        log("refreshing the Flow page")
+        self.f.pt.nav(self.f.project or gf.FLOW_HOME)
+        time.sleep(3)
+        self.f.inject()
+        self.f.wait_signed_in()
+
+    def download(self, p: dict, take: int, quality: str, name: str, timeout_min: float, reload: bool) -> dict:
+        """Download take `take` (1-based) of scene p; after a refresh the grid is rebuilt, so find the tile again."""
+        if reload:
+            self.reload()
+        idx = self.locate(p["keys"])
+        if idx is None:
+            return {"ok": False, "error": f"scene {p['nn']}'s tiles are no longer in the Flow grid"}
+        return guarded(self.f.download, idx[take - 1], quality, self.job.out, name, timeout_min=timeout_min)
+
     def finish(self, p: dict) -> dict:
         """Pick the best takes of a previewed scene and upscale only those."""
         nn = p["nn"]
@@ -119,14 +136,11 @@ class Pipeline:
         takes, why = batch.autopick(p["sheet"], self.job.prompts[p["n"]], self.a.keep, self.a.picker_model, p["takes"])
         if not takes or len(set(takes)) != self.a.keep or any(t not in p["takes"] for t in takes):
             raise Guarded(f"pick failed for scene {nn}: {why} (sheet: {p['sheet']}; choose with batch.py keep A,B)")
-        idx = self.locate(p["keys"])
-        if idx is None:
-            raise Guarded(f"scene {nn}'s tiles are no longer in the Flow grid")
         saved = []
         for k, take in enumerate(takes):
-            i, name = idx[take - 1], f"{nn}_{LETTERS[k]}"
-            d = batch.robust_download(lambda q, t, i=i, name=name: guarded(self.f.download, i, q, self.job.out, name,
-                                                                            timeout_min=t), self.a.quality)
+            name = f"{nn}_{LETTERS[k]}"
+            d = batch.robust_download(lambda q, t, r, take=take, name=name: self.download(p, take, q, name, t, r),
+                                      self.a.quality)
             if not d.get("path"):
                 raise Guarded(f"download of scene {nn} take {take} failed: {d}")
             if d.get("fallback"):
