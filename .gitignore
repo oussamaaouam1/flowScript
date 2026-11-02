@@ -1,0 +1,11 @@
+# never commit sign-in data, cookies, or generated media
+cookies*.json
+*.cookies.json
+.env
+vendor/
+output/
+jobs/*/
+*.jpg
+*.png
+*.mp4
+__pycache__/
