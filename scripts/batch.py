@@ -14,7 +14,7 @@ Usage:
   python batch.py PROMPTS.txt --out DIR keep 1,3
   python batch.py PROMPTS.txt --out DIR status
 
-Common options: --count 3 --keep 2 --quality 2k --model nano --aspect 16:9 --picker-model gemini-3.8-flash-low
+Common options: --offset 0 --count 3 --keep 2 --quality 2k --model nano --aspect 16:9 --picker-model gemini-3.8-flash-low
 `gen` without --n takes the first prompt of the set that is not done. --adopt uses the newest COUNT tiles already in
 Flow instead of generating (a prompt that was generated but not downloaded). Takes are numbered 1..COUNT in Flow's
 tile order (newest first), as on the contact sheet. Progress lives in DIR/_flowscript_state.json.
@@ -94,9 +94,13 @@ class Job:
     def key(self, n):
         return f"{self.a.set}:{n}"
 
+    def nn(self, n) -> str:
+        """File number of prompt n: NN = n + --offset (e.g. --offset 17 names set 2's prompt 1 as 18)."""
+        return f"{n + self.a.offset:02d}"
+
     def already_saved(self, n) -> bool:
         """True when the scene is done here or its NN_a file already exists (e.g. the user made it by hand)."""
-        return self.key(n) in self.state["done"] or any(self.out.glob(f"{n:02d}_a.*"))
+        return self.key(n) in self.state["done"] or any(self.out.glob(f"{self.nn(n)}_a.*"))
 
     # -- gen ------------------------------------------------------------------------------------
     def gen(self, n: int | None, adopt: bool) -> dict:
@@ -110,7 +114,7 @@ class Job:
                 return {"ok": True, "message": f"all prompts of set {a.set} are done"}
         if n not in self.prompts:
             return {"ok": False, "error": f"prompt {n} is not in set {a.set}"}
-        nn = f"{n:02d}"
+        nn = self.nn(n)
         prev = PREVIEW_ROOT / f"set{a.set}_{nn}"
         shutil.rmtree(prev, ignore_errors=True)
         prev.mkdir(parents=True)
@@ -137,8 +141,8 @@ class Job:
         takes = sorted(int(m.group(1)) for f in prev.iterdir() if (m := re.match(rf"^{nn}_(\d+)\.", f.name)))
         if not takes:
             return {"ok": False, "n": n, "error": "no take was downloaded", "tiles": tiles}
-        sheet = ps(PICK_PS1, ["-Out", str(prev), "-N", str(n), "-Sheet"], 120).stdout.strip().splitlines()
-        self.state["pending"] = {"set": a.set, "n": n, "takes": takes, "tiles": tiles, "preview": str(prev),
+        sheet = ps(PICK_PS1, ["-Out", str(prev), "-N", str(int(nn)), "-Sheet"], 120).stdout.strip().splitlines()
+        self.state["pending"] = {"set": a.set, "n": n, "nn": nn, "takes": takes, "tiles": tiles, "preview": str(prev),
                                  "sheet": sheet[-1] if sheet else None}
         self.save()
         return {"ok": True, "n": n, "takes": takes, "sheet": self.state["pending"]["sheet"],
@@ -156,7 +160,7 @@ class Job:
             chosen = []
         if not chosen or len(set(chosen)) != len(chosen) or any(c not in p["takes"] for c in chosen):
             return {"ok": False, "error": f"choose distinct takes from {p['takes']}, e.g. keep 1,3"}
-        nn = f"{p['n']:02d}"
+        nn = p.get("nn") or self.nn(p["n"])
         clash = [f.name for f in self.out.glob(f"{nn}_[a-j].*")]
         if clash:
             return {"ok": False, "error": f"{', '.join(clash)} already exist in the output folder; not overwriting"}
@@ -239,6 +243,7 @@ def main() -> int:
     ap.add_argument("--from", dest="start", type=int, help="run: first prompt")
     ap.add_argument("--to", dest="end", type=int, help="run: last prompt")
     ap.add_argument("--adopt", action="store_true", help="gen: use the newest tiles already in Flow")
+    ap.add_argument("--offset", type=int, default=0, help="add to the prompt number for file names (e.g. 17: set 2 prompt 1 -> 18_a)")
     ap.add_argument("--count", type=int, default=3, help="takes per prompt")
     ap.add_argument("--keep", type=int, default=2, help="run: takes kept per prompt")
     ap.add_argument("--quality", default="2k", help="2k | 1080p | original | best")

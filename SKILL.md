@@ -28,7 +28,7 @@ cd ~/Developer/flowScript
 python scripts\batch.py PROMPTS.txt --list                                   # sets and prompt counts
 python scripts\batch.py PROMPTS.txt --out "C:\...\1" run --from 14 --to 17   # gen -> auto-pick -> keep, per prompt
 ```
-Run it in the background. Per prompt it generates x3, a cheap vision model picks the best 2 from a small contact sheet
+Run it in the background. Several sets, one folder, continuous numbering: `run --set 2 --offset 17` saves set 2 prompt 1 as `18_a`. Per prompt it generates x3, a cheap vision model picks the best 2 from a small contact sheet
 (Antigravity `agy`, `--picker-model gemini-3.8-flash-low`, ~7 s; it may only read files), and only those 2 are upscaled
 to 2K as `NN_a.jpg`, `NN_b.jpg`. One JSON line per prompt with the kept takes and the picker's reason; relay them.
 Scenes whose `NN_a` already exists in the folder (made by hand) are skipped, and nothing is ever overwritten. If the
