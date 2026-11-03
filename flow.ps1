@@ -8,7 +8,8 @@
 # No PowerShell param() block on purpose: PowerShell would bind flow.py's own "-p" flag to a switch starting with P.
 $EnsureServerOnly = $args.Count -gt 0 -and $args[0] -eq '--ensure-server'
 $Pipeline = $args.Count -gt 0 -and $args[0] -eq '--pipeline'
-$rest = if ($EnsureServerOnly -or $Pipeline) { @($args | Select-Object -Skip 1) } else { @($args) }
+# @(...) around the whole if: otherwise a single argument ("status") unrolls to a string and splats letter by letter
+$rest = @(if ($EnsureServerOnly -or $Pipeline) { $args | Select-Object -Skip 1 } else { $args })
 $ErrorActionPreference = 'Stop'
 $Root = $PSScriptRoot
 $py = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'
