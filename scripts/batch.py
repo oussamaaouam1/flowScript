@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -127,6 +128,17 @@ def pause(message: str):
                                       "message": message}), encoding="utf-8")
 
 
+def refresh_page() -> dict:
+    env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    env.setdefault("PINCHTAB_CONFIG", str(Path(os.environ.get("APPDATA", "")) / "pinchtab" / "config.json"))
+    try:
+        p = subprocess.run([sys.executable, "-X", "utf8", str(ROOT / "scripts" / "reload.py")], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", env=env, timeout=180)
+        return json.loads(p.stdout.strip().splitlines()[-1])
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"refresh failed: {e}"}
+
+
 def emit(obj: dict) -> dict:
     print(json.dumps(obj, ensure_ascii=False), flush=True)
     return obj
@@ -194,16 +206,38 @@ class Job:
             r = flow(["image", "-p", self.prompts[n], "--model", a.model, "--aspect", a.aspect, "--count", str(a.count),
                       "--download", "original", "--out", str(prev), "--name", pnn, "--timeout", str(a.timeout_min)],
                      timeout_s=(a.timeout_min + 10) * 60)
+            if not r.get("results") and "did not accept the generate click" in str(r.get("error"))                     and not getattr(self, "_retried_click", False):
+                # nothing was submitted: refresh the page once and try again
+                print(f"[batch] prompt {n}: Flow did not take the generate click; refreshing the page and retrying once",
+                      file=sys.stderr, flush=True)
+                self._retried_click = True
+                refresh_page()
+                time.sleep(random.uniform(10, 20))
+                try:
+                    return self.gen(n, adopt=False)
+                finally:
+                    self._retried_click = False
             if not r.get("results"):
                 return {"ok": False, "n": n, "error": r.get("error"), "flow_stderr": (r.get("stderr") or "")[-600:] or None,
                         "hint": "run `flow.ps1 list image --limit 6` before retrying; use gen --adopt if the tiles exist"}
             tiles = [{"i": x["index"], "title": x["title"], "failed": x["failed"], "message": x.get("message")}
                      for x in r["results"]]
             hit = next((t["message"] for t in tiles if t.get("message") and DETECTION_RE.search(t["message"])), None)
+            if hit and not getattr(self, "_retried_detection", False):
+                # Flow did not charge it. Refresh the page once and try this prompt again.
+                print(f"[batch] prompt {n}: Flow reported unusual activity; refreshing the page and retrying once",
+                      file=sys.stderr, flush=True)
+                self._retried_detection = True
+                refresh_page()
+                time.sleep(random.uniform(20, 40))
+                try:
+                    return self.gen(n, adopt=False)
+                finally:
+                    self._retried_detection = False
             if hit:
                 pause(hit)
-                return {"ok": False, "n": n, "error": "Flow reported unusual activity: automation paused for "
-                        f"{PAUSE_HOURS} h to protect the account", "flow_message": hit[:300]}
+                return {"ok": False, "n": n, "error": "Flow reported unusual activity again after a page refresh: "
+                        f"automation paused for {PAUSE_HOURS} h to protect the account", "flow_message": hit[:300]}
             spent = r.get("credits_spent")
         takes = sorted(int(m.group(1)) for f in prev.iterdir() if (m := re.match(rf"^{pnn}_(\d+)\.", f.name)))
         if not takes:
@@ -272,7 +306,11 @@ class Job:
                 return emit({"stage": "keep", **k})
             emit({"ok": True, "n": p["n"], "kept": takes, "reason": why, "files": k["saved"]})
             todo = [n for n in todo if n != p["n"]]
-        for n in todo:
+        for i, n in enumerate(todo):
+            if i:
+                wait = random.uniform(*a.pause)
+                print(f"[batch] pause {wait:.0f}s", file=sys.stderr, flush=True)
+                time.sleep(wait)
             g = self.gen(n, adopt=False)
             if not g.get("ok"):
                 return emit({"stage": "gen", **g})
@@ -349,6 +387,8 @@ def main() -> int:
     ap.add_argument("--aspect", default="16:9")
     ap.add_argument("--picker-model", default="gemini-3.8-flash-low", help="agy model used by run to pick takes")
     ap.add_argument("--timeout-min", type=int, default=15)
+    ap.add_argument("--pause", type=float, nargs=2, default=[20, 60], metavar=("MIN", "MAX"),
+                    help="run: random seconds to wait between prompts")
     ap.add_argument("--force-resume", action="store_true", help="ignore the 24 h safety pause (not recommended)")
     a = ap.parse_args()
 

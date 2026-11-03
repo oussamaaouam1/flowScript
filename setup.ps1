@@ -58,6 +58,11 @@ $bak = "$ptConf.bak-flowscript"
 if (-not (Test-Path $bak)) { Copy-Item $ptConf $bak }
 & $py -X utf8 (Join-Path $Root 'scripts\pinchtab_conf.py') $ptConf
 if ($LASTEXITCODE -ne 0) { throw 'could not update the PinchTab config' }
+# PinchTab cannot discover Chrome on Windows: point it at the installed browser
+$chrome = @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+            "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($chrome -and -not (pinchtab config get browser.binary)) { pinchtab config set browser.binary $chrome | Out-Null }
+Write-Host "chrome:   $(pinchtab config get browser.binary)"
 
 # 4. server
 & (Join-Path $Root 'flow.ps1') --ensure-server
