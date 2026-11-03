@@ -126,7 +126,12 @@ class Job:
         return f"{self.a.set}:{n}"
 
     def nn(self, n) -> str:
-        """File number of prompt n: NN = n + --offset (e.g. --offset 17 names set 2's prompt 1 as 18)."""
+        """File number of prompt n: n + --offset (e.g. --offset 17 names set 2's prompt 1 as 18), zero-padded to
+        --pad digits (default 2: 09_a; --pad 1: 9_a)."""
+        return f"{n + self.a.offset:0{self.a.pad}d}"
+
+    def pnn(self, n) -> str:
+        """Preview/sheet name (always 2 digits, as pick.ps1 expects)."""
         return f"{n + self.a.offset:02d}"
 
     def already_saved(self, n) -> bool:
@@ -145,8 +150,8 @@ class Job:
                 return {"ok": True, "message": f"all prompts of set {a.set} are done"}
         if n not in self.prompts:
             return {"ok": False, "error": f"prompt {n} is not in set {a.set}"}
-        nn = self.nn(n)
-        prev = PREVIEW_ROOT / f"set{a.set}_{nn}"
+        nn, pnn = self.nn(n), self.pnn(n)
+        prev = PREVIEW_ROOT / f"set{a.set}_{pnn}"
         shutil.rmtree(prev, ignore_errors=True)
         prev.mkdir(parents=True)
         t0 = time.time()
@@ -155,24 +160,24 @@ class Job:
             if len(tiles) < a.count or any(t.get("failed") or t.get("progress") not in (None, 100) for t in tiles):
                 return {"ok": False, "error": "the newest tiles are not finished images", "tiles": tiles}
             for t in tiles:
-                d = flow(["download", str(t["i"]), "--quality", "original", "--out", str(prev), "--name", f"{nn}_{t['i'] + 1}"])
+                d = flow(["download", str(t["i"]), "--quality", "original", "--out", str(prev), "--name", f"{pnn}_{t['i'] + 1}"])
                 if d.get("ok") is False:
                     return {"ok": False, "error": f"preview download failed: {d.get('error')}"}
             spent = 0
         else:
             print(f"[batch] prompt {n}: generating x{a.count}…", file=sys.stderr, flush=True)
             r = flow(["image", "-p", self.prompts[n], "--model", a.model, "--aspect", a.aspect, "--count", str(a.count),
-                      "--download", "original", "--out", str(prev), "--name", nn, "--timeout", str(a.timeout_min)],
+                      "--download", "original", "--out", str(prev), "--name", pnn, "--timeout", str(a.timeout_min)],
                      timeout_s=(a.timeout_min + 10) * 60)
             if not r.get("results"):
                 return {"ok": False, "n": n, "error": r.get("error"), "flow_stderr": (r.get("stderr") or "")[-600:] or None,
                         "hint": "run `flow.ps1 list image --limit 6` before retrying; use gen --adopt if the tiles exist"}
             tiles = [{"i": x["index"], "title": x["title"], "failed": x["failed"]} for x in r["results"]]
             spent = r.get("credits_spent")
-        takes = sorted(int(m.group(1)) for f in prev.iterdir() if (m := re.match(rf"^{nn}_(\d+)\.", f.name)))
+        takes = sorted(int(m.group(1)) for f in prev.iterdir() if (m := re.match(rf"^{pnn}_(\d+)\.", f.name)))
         if not takes:
             return {"ok": False, "n": n, "error": "no take was downloaded", "tiles": tiles}
-        sheet = ps(PICK_PS1, ["-Out", str(prev), "-N", str(int(nn)), "-Sheet"], 120).stdout.strip().splitlines()
+        sheet = ps(PICK_PS1, ["-Out", str(prev), "-N", str(int(pnn)), "-Sheet"], 120).stdout.strip().splitlines()
         self.state["pending"] = {"set": a.set, "n": n, "nn": nn, "takes": takes, "tiles": tiles, "preview": str(prev),
                                  "sheet": sheet[-1] if sheet else None}
         self.save()
@@ -304,6 +309,7 @@ def main() -> int:
     ap.add_argument("--from", dest="start", type=int, help="run: first prompt")
     ap.add_argument("--to", dest="end", type=int, help="run: last prompt")
     ap.add_argument("--adopt", action="store_true", help="gen: use the newest tiles already in Flow")
+    ap.add_argument("--pad", type=int, default=2, help="digits in file names: 2 -> 09_a (default), 1 -> 9_a")
     ap.add_argument("--offset", type=int, default=0, help="add to the prompt number for file names (e.g. 17: set 2 prompt 1 -> 18_a)")
     ap.add_argument("--count", type=int, default=3, help="takes per prompt")
     ap.add_argument("--keep", type=int, default=2, help="run: takes kept per prompt")
