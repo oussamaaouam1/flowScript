@@ -104,6 +104,29 @@ def robust_download(attempt, quality: str) -> dict:
     return last
 
 
+PAUSE_FILE = Path.home() / ".config" / "google-flow" / "flowscript_paused.json"
+PAUSE_HOURS = 24
+DETECTION_RE = re.compile(r"unusual activity|automated|suspicious|verify (that )?you|captcha", re.I)
+
+
+def paused() -> str | None:
+    """Safety stop: after Flow reported unusual activity, refuse to generate for PAUSE_HOURS (or until --force-resume)."""
+    try:
+        d = json.loads(PAUSE_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    left = d.get("until", 0) - time.time()
+    if left <= 0:
+        return None
+    return f"paused for {left / 3600:.1f} more h: Flow reported \"{d.get('message', '')[:120]}\" on {d.get('at')}"
+
+
+def pause(message: str):
+    PAUSE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PAUSE_FILE.write_text(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M"), "until": time.time() + PAUSE_HOURS * 3600,
+                                      "message": message}), encoding="utf-8")
+
+
 def emit(obj: dict) -> dict:
     print(json.dumps(obj, ensure_ascii=False), flush=True)
     return obj
@@ -141,6 +164,8 @@ class Job:
     # -- gen ------------------------------------------------------------------------------------
     def gen(self, n: int | None, adopt: bool) -> dict:
         a = self.a
+        if (why := paused()) and not a.force_resume:
+            return {"ok": False, "error": why, "hint": "let the account rest; --force-resume overrides (not recommended)"}
         if self.state.get("pending"):
             p = self.state["pending"]
             return {"ok": False, "error": f"prompt {p['n']} is waiting for `keep` (sheet: {p['sheet']})", "pending": p}
@@ -172,7 +197,13 @@ class Job:
             if not r.get("results"):
                 return {"ok": False, "n": n, "error": r.get("error"), "flow_stderr": (r.get("stderr") or "")[-600:] or None,
                         "hint": "run `flow.ps1 list image --limit 6` before retrying; use gen --adopt if the tiles exist"}
-            tiles = [{"i": x["index"], "title": x["title"], "failed": x["failed"]} for x in r["results"]]
+            tiles = [{"i": x["index"], "title": x["title"], "failed": x["failed"], "message": x.get("message")}
+                     for x in r["results"]]
+            hit = next((t["message"] for t in tiles if t.get("message") and DETECTION_RE.search(t["message"])), None)
+            if hit:
+                pause(hit)
+                return {"ok": False, "n": n, "error": "Flow reported unusual activity: automation paused for "
+                        f"{PAUSE_HOURS} h to protect the account", "flow_message": hit[:300]}
             spent = r.get("credits_spent")
         takes = sorted(int(m.group(1)) for f in prev.iterdir() if (m := re.match(rf"^{pnn}_(\d+)\.", f.name)))
         if not takes:
@@ -318,6 +349,7 @@ def main() -> int:
     ap.add_argument("--aspect", default="16:9")
     ap.add_argument("--picker-model", default="gemini-3.8-flash-low", help="agy model used by run to pick takes")
     ap.add_argument("--timeout-min", type=int, default=15)
+    ap.add_argument("--force-resume", action="store_true", help="ignore the 24 h safety pause (not recommended)")
     a = ap.parse_args()
 
     sets = parse_sets(Path(a.prompts).read_text(encoding="utf-8-sig"))

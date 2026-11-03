@@ -54,6 +54,13 @@ python scripts\batch.py PROMPTS.txt --out "C:\...\1" keep 1,3    # upscale takes
 Recovery: prompt generated but not downloaded (run stopped) → `gen --n N --adopt` uses the newest 3 tiles in Flow
 without generating again. Defaults: Nano Banana 2.1, 16:9, x3, keep at 2K (`--quality` to change).
 
+## Account safety
+
+Flow can detect automation. If a generation fails with **"We noticed some unusual activity"**, the scripts stop, write a
+24-hour pause (`~/.config/google-flow/flowscript_paused.json`) and refuse to generate until it expires
+(`--force-resume` overrides; not recommended). When that happens: stop PinchTab, generate by hand for a while, keep
+volumes low, and consider a separate Google account for automation. A run of ~30 prompts in a row triggered it once.
+
 ## Rules
 
 - Images cost 0 credits on the user's plan, but report `credits_spent` from the JSON if it is not 0.

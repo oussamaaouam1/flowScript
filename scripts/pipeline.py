@@ -155,6 +155,8 @@ class Pipeline:
     # -- main loop ------------------------------------------------------------------------------
     def run(self) -> int:
         a = self.a
+        if (why := batch.paused()) and not getattr(a, "force_resume", False):
+            raise Guarded(why + " (let the account rest)")
         todo = [n for n in self.job.prompts if (a.start is None or n >= a.start) and (a.end is None or n <= a.end)
                 and not self.job.already_saved(n)]
         pending = self.job.state.get("pending")
@@ -178,6 +180,10 @@ class Pipeline:
                 self.finish(pending)
                 pending = None
             new = guarded(self.f.wait_tiles, before, a.count, a.timeout_min)
+            hit = next((t.get("text") for t in new if t.get("failed") and batch.DETECTION_RE.search(t.get("text") or "")), None)
+            if hit:
+                batch.pause(hit)
+                raise Guarded(f"Flow reported unusual activity; automation paused for {batch.PAUSE_HOURS} h: {hit[:200]}")
             log(f"scene {self.job.nn(n)} rendered in {time.time() - t0:.0f}s")
             pending = self.previews(n, new)
         if pending:
